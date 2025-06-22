@@ -91,22 +91,70 @@ project-root/
 Key parameters in the code (all adjustable at top of files):
 
 ```python
-# Detection Sensitivity
-CORROSION_THRESHOLD = 50      # Lower = more sensitive to dark spots
-CRACK_THRESHOLD = 5           # Lower = detects fainter cracks
-MIN_DEFECT_AREA = 2           # Minimum defect size (pixels)
+# === CONFIGURABLE MACROS ===
+# ROI Configuration
+ROI_START_PERCENT = 0.50          # % of image width to extract for rail ROI
+ROI_WIDTH_PERCENT = 0.30          # % of image width to extract for rail ROI
 
-# Visualization
-DEFECT_LABEL_FONT_SCALE = 0.6 # Text size for defect labels
-DEFECT_COLORS = {             # Customize defect highlight colors
-    'Corrosion': (0, 0, 255), # Red
-    'Wear': (255, 0, 0),      # Blue
-    'Crack': (0, 255, 0)      # Green
+# LED Light Removal Configuration
+LED_LIGHT_THRESHOLD = 400         # LED detection brightness threshold
+LED_KERNEL_SIZE = 80              # Size of morphological structuring element
+LED_MIN_AREA = 200                # Minimum area to trigger inpainting
+INPAINT_RADIUS = 20               # Radius for inpainting blur
+
+# Defect Detection Thresholds
+CORROSION_THRESHOLD = 50          # Dark spot threshold
+CRACK_THRESHOLD = 5               # Crack detection threshold
+MIN_DEFECT_AREA = 2               # Ignore small defects below this area
+MAX_DEFECT_AREA = 1000            # Ignore overly large blobs
+MIN_CRACK_LENGTH = 1              # Minimum length to be considered a crack
+ROUGHNESS_INTENSITY_THRESHOLD = 10 # For surface wear / rough track
+
+# Image Processing Parameters
+BILATERAL_FILTER_D = 9            # Diameter for bilateral filter
+BILATERAL_FILTER_SIGMA_COLOR = 80 # Sigma color for bilateral filter
+BILATERAL_FILTER_SIGMA_SPACE = 80 # Sigma space for bilateral filter
+GAUSSIAN_BLUR_KERNEL = (3, 3)     # Kernel size for Gaussian blur
+ADAPTIVE_THRESH_BLOCK_SIZE = 21   # Block size for adaptive threshold
+ADAPTIVE_THRESH_C = 10            # Constant for adaptive threshold
+MORPH_KERNEL_SIZE = (5, 5)        # Size for morphological operations
+LINE_DETECTION_KERNEL_SIZE = 15   # Size for line detection kernels
+CANNY_THRESHOLD1 = 30             # Canny edge detection threshold 1
+CANNY_THRESHOLD2 = 100            # Canny edge detection threshold 2
+CANNY_APERTURE_SIZE = 3           # Canny aperture size
+HOUGH_THRESHOLD = 30              # Threshold for Hough line detection
+HOUGH_MIN_LINE_LENGTH = 1         # Minimum line length for Hough
+HOUGH_MAX_LINE_GAP = 10           # Maximum line gap for Hough
+
+# Defect Classification Thresholds
+CORROSION_SEVERE_AREA = 2000      # Area threshold for severe corrosion
+CORROSION_MEDIUM_AREA = 800       # Area threshold for medium corrosion
+WEAR_SEVERE_AREA = 1500           # Area threshold for severe wear
+CRACK_SEVERE_LENGTH = 100         # Length threshold for severe cracks
+DEFECT_LABEL_AREA = 500           # Minimum area to show defect label
+
+# Visualization Parameters
+ROI_BOUNDARY_COLOR = (255, 255, 0) # Color for ROI boundary (BGR)
+DEFECT_COLORS = {
+    'Corrosion/Dark Spot': (0, 0, 255),    # Red
+    'Surface Wear/Lines': (255, 0, 0),     # Blue
+    'Crack/Linear Defect': (0, 255, 0)     # Green
 }
+DEFECT_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
+DEFECT_LABEL_FONT_SCALE = 0.6      # Increased font size
+DEFECT_LABEL_THICKNESS = 2         # Increased thickness
+SUMMARY_FONT_SCALE = 1.0           # Increased summary font size
+SUMMARY_FONT_THICKNESS = 2
 
-# Live Mode Settings
-RECORDING_DURATION = 20       # Seconds per video clip
-LIVE_FPS = 15                 # Framerate (lower for RPi optimization)
+# Live Processing Parameters
+LIVE_FRAME_WIDTH = 640             # Reduced for RPi performance
+LIVE_FRAME_HEIGHT = 480
+LIVE_FPS = 15                      # Reduced FPS for RPi
+RECORDING_DURATION = 20            # seconds
+VIDEO_FPS = 15                     # frames per second for recording
+OUTPUT_VIDEO_CODEC = 'XVID'        # Codec for video recording
+BUTTON_COLOR = (0, 255, 0)         # Green color for active buttons
+BUTTON_INACTIVE_COLOR = (50, 50, 50) # Gray color for inactive buttons
 ```
 
 ## 📊 Sample Outputs
