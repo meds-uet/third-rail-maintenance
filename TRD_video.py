@@ -8,8 +8,8 @@ import time
 
 # === CONFIGURABLE MACROS ===
 # ROI Configuration
-ROI_START_PERCENT = 0.50          # % of image width to extract for rail ROI
-ROI_WIDTH_PERCENT = 0.30          # % of image width to extract for rail ROI
+ROI_START_PERCENT = 0.40          # % of image width to extract for rail ROI
+ROI_WIDTH_PERCENT = 0.40          # % of image width to extract for rail ROI
 
 # LED Light Removal Configuration
 LED_LIGHT_THRESHOLD = 400         # LED detection brightness threshold
@@ -51,10 +51,11 @@ DEFECT_LABEL_AREA = 500           # Minimum area to show defect label
 # Visualization Parameters
 ROI_BOUNDARY_COLOR = (255, 255, 0) # Color for ROI boundary (BGR)
 DEFECT_COLORS = {
-    'Corrosion/Dark Spot': (0, 0, 255),    # Red
-    'Surface Wear/Lines': (255, 0, 0),     # Blue
-    'Crack/Linear Defect': (0, 255, 0)     # Green
+    'Corrosion/Dark Spot': {'bgr': (0, 0, 255), 'name': 'Red'},
+    'Surface Wear/Lines': {'bgr': (255, 0, 0), 'name': 'Blue'}, 
+    'Crack/Linear Defect': {'bgr': (0, 255, 0), 'name': 'Green'}
 }
+
 DEFECT_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
 DEFECT_LABEL_FONT_SCALE = 0.6      # Increased font size
 DEFECT_LABEL_THICKNESS = 2         # Increased thickness
@@ -288,7 +289,7 @@ class ThirdRailDefectDetector:
                     'area': area,
                     'bbox': (x, y, w, h),
                     'severity': severity,
-                    'color': DEFECT_COLORS['Corrosion/Dark Spot']
+                    'color': DEFECT_COLORS['Corrosion/Dark Spot']['bgr']  # Use 'bgr' here
                 })
         
         # Process surface wear
@@ -304,7 +305,7 @@ class ThirdRailDefectDetector:
                     'area': area,
                     'bbox': (x, y, w, h),
                     'severity': severity,
-                    'color': DEFECT_COLORS['Surface Wear/Lines']
+                    'color': DEFECT_COLORS['Surface Wear/Lines']['bgr']  # Use 'bgr' here
                 })
         
         # Process cracks
@@ -322,11 +323,11 @@ class ThirdRailDefectDetector:
                     'bbox': (x, y, w, h),
                     'length': length,
                     'severity': severity,
-                    'color': DEFECT_COLORS['Crack/Linear Defect']
+                    'color': DEFECT_COLORS['Crack/Linear Defect']['bgr']  # Use 'bgr' here
                 })
         
-        return defects
-    
+        return defects  
+      
     def visualize_defects(self, original_image, defects, roi_bounds):
         """Create visualization with better annotations"""
         result_image = original_image.copy()
@@ -334,12 +335,13 @@ class ThirdRailDefectDetector:
         
         # Draw ROI boundary
         cv2.rectangle(result_image, (roi_start_x, 0), (roi_end_x, original_image.shape[0]), 
-                     ROI_BOUNDARY_COLOR, 2)
+                    ROI_BOUNDARY_COLOR, 2)
         
         defect_count = {'Corrosion/Dark Spot': 0, 'Surface Wear/Lines': 0, 'Crack/Linear Defect': 0}
         
         for defect in defects:
-            color = defect['color']
+            color_info = DEFECT_COLORS[defect['type']]
+            color = color_info['bgr']  # Use 'bgr' instead of 'color'
             contour = defect['contour']
             defect_count[defect['type']] += 1
             
@@ -364,18 +366,21 @@ class ThirdRailDefectDetector:
                 # Add label
                 label = f"{defect['type'][:4]}-{defect['severity'][0]}"
                 cv2.putText(result_image, label, (x, y-10), 
-                           DEFECT_LABEL_FONT, DEFECT_LABEL_FONT_SCALE, color, DEFECT_LABEL_THICKNESS)
+                        DEFECT_LABEL_FONT, DEFECT_LABEL_FONT_SCALE, color, DEFECT_LABEL_THICKNESS)
         
-        # Add summary text
+        # Add summary text with color information
         y_offset = 30
         cv2.putText(result_image, f"Total Defects: {len(defects)}", (10, y_offset), 
-                   DEFECT_LABEL_FONT, SUMMARY_FONT_SCALE, (255, 255, 255), SUMMARY_FONT_THICKNESS)
+                DEFECT_LABEL_FONT, SUMMARY_FONT_SCALE, (255, 255, 255), SUMMARY_FONT_THICKNESS)
         
         for defect_type, count in defect_count.items():
             if count > 0:
                 y_offset += 25
-                cv2.putText(result_image, f"{defect_type}: {count}", (10, y_offset), 
-                           DEFECT_LABEL_FONT, 0.5, (255, 255, 255), 1)
+                color_info = DEFECT_COLORS[defect_type]
+                color_name = color_info['name']
+                display_text = f"{defect_type} ({color_name}): {count}"
+                cv2.putText(result_image, display_text, (10, y_offset), 
+                        DEFECT_LABEL_FONT, 0.5, (255, 255, 255), 1)
         
         return result_image
     
