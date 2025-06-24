@@ -1,0 +1,244 @@
+=== THIRD RAIL DEFECT DETECTION REPORT ===
+Generated on: 2025-06-24 01:47:07
+Total Defects Found: 40
+
+Defect #1:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 51.00
+  BBox     : (0, 1071, 10, 9)
+
+Defect #2:
+  Type     : Corrosion/Dark Spot
+  Severity : Medium
+  Area     : 904.00
+  BBox     : (0, 1028, 38, 30)
+
+Defect #3:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 67.50
+  BBox     : (204, 878, 11, 11)
+
+Defect #4:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 5.00
+  BBox     : (0, 646, 3, 5)
+
+Defect #5:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 10.00
+  BBox     : (265, 599, 5, 5)
+
+Defect #6:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 38.00
+  BBox     : (244, 564, 7, 12)
+
+Defect #7:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 29.00
+  BBox     : (325, 563, 6, 10)
+
+Defect #8:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 26.00
+  BBox     : (322, 552, 6, 8)
+
+Defect #9:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 23.00
+  BBox     : (240, 545, 6, 8)
+
+Defect #10:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 21.00
+  BBox     : (311, 514, 6, 7)
+
+Defect #11:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 10.00
+  BBox     : (230, 496, 5, 5)
+
+Defect #12:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 17.50
+  BBox     : (256, 485, 6, 6)
+
+Defect #13:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 14.00
+  BBox     : (226, 481, 5, 6)
+
+Defect #14:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 67.00
+  BBox     : (305, 474, 8, 18)
+
+Defect #15:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 18.00
+  BBox     : (303, 463, 5, 7)
+
+Defect #16:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 10.00
+  BBox     : (249, 462, 5, 5)
+
+Defect #17:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 40.00
+  BBox     : (245, 450, 8, 10)
+
+Defect #18:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 659.50
+  BBox     : (336, 428, 31, 70)
+
+Defect #19:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 31.50
+  BBox     : (238, 408, 6, 9)
+
+Defect #20:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 10.00
+  BBox     : (310, 389, 5, 5)
+
+Defect #21:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 102.00
+  BBox     : (127, 178, 8, 20)
+
+Defect #22:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 58.00
+  BBox     : (0, 162, 7, 12)
+
+Defect #23:
+  Type     : Corrosion/Dark Spot
+  Severity : Low
+  Area     : 22.50
+  BBox     : (9, 151, 7, 6)
+
+Defect #24:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 106.50
+  BBox     : (460, 825, 8, 28)
+
+Defect #25:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 117.00
+  BBox     : (466, 713, 15, 22)
+
+Defect #26:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 45.00
+  BBox     : (305, 706, 12, 13)
+
+Defect #27:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 70.50
+  BBox     : (457, 655, 13, 17)
+
+Defect #28:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 45.00
+  BBox     : (404, 625, 8, 13)
+
+Defect #29:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 170.50
+  BBox     : (451, 617, 14, 32)
+
+Defect #30:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 192.00
+  BBox     : (386, 566, 19, 27)
+
+Defect #31:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 323.00
+  BBox     : (439, 553, 29, 47)
+
+Defect #32:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 271.50
+  BBox     : (408, 551, 18, 40)
+
+Defect #33:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 262.00
+  BBox     : (431, 521, 15, 28)
+
+Defect #34:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 262.50
+  BBox     : (417, 456, 15, 32)
+
+Defect #35:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 338.50
+  BBox     : (408, 403, 18, 46)
+
+Defect #36:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 705.50
+  BBox     : (339, 316, 29, 58)
+
+Defect #37:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 944.00
+  BBox     : (381, 268, 35, 127)
+
+Defect #38:
+  Type     : Surface Wear/Lines
+  Severity : Low
+  Area     : 141.00
+  BBox     : (374, 232, 12, 30)
+
+Defect #39:
+  Type     : Surface Wear/Lines
+  Severity : Medium
+  Area     : 230328.50
+  BBox     : (0, 142, 576, 938)
+
+Defect #40:
+  Type     : Crack/Linear Defect
+  Severity : High
+  Area     : 185.00
+  BBox     : (244, 410, 41, 109)
+  Length   : 109.00

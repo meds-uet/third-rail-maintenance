@@ -8,8 +8,8 @@ from datetime import datetime
 
 # === CONFIGURABLE MACROS ===
 # ROI Configuration
-ROI_START_PERCENT = 0.50          # % of image width to extract for rail ROI
-ROI_WIDTH_PERCENT = 0.30          # % of image width to extract for rail ROI
+ROI_START_PERCENT = 0.40          # % of image width to extract for rail ROI
+ROI_WIDTH_PERCENT = 0.40          # % of image width to extract for rail ROI
 
 # LED Light Removal Configuration
 LED_LIGHT_THRESHOLD = 400         # LED detection brightness threshold
