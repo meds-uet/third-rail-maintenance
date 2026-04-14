@@ -83,7 +83,7 @@ project-root/
 │   ├── live_captures/       # Webcam still images
 │   └── live_recordings/     # Recorded video clips
 ├── assets/                  # Documentation assets
-├── TRD_training.py          # Batch image processing 
+├── TRD_training.py          # Batch image processing
 └── TRD_video.py             # Live webcam processing script
 ```
 
@@ -157,13 +157,6 @@ BUTTON_COLOR = (0, 255, 0)         # Green color for active buttons
 BUTTON_INACTIVE_COLOR = (50, 50, 50) # Gray color for inactive buttons
 ```
 
-## 📊 Sample Outputs
-
-### Batch Processing Example
-| Original Image | Processed Result |
-|----------------|------------------|
-| ![Original](assets/sample_original.jpg) | ![Processed](assets/sample_processed.jpg) |
-
 
 ## 🧩 Technical Approach
 1. **ROI Extraction**: Focuses analysis on the critical rail surface area
@@ -191,7 +184,7 @@ BUTTON_INACTIVE_COLOR = (50, 50, 50) # Gray color for inactive buttons
 MIT License - See [LICENSE](LICENSE) for details
 
 ## ✉️ Contact
-**Umer Shahid**  
-Department of Electrical Engineering  
-University of Engineering & Technology (UET), Lahore  
+**Umer Shahid**
+Department of Electrical Engineering
+University of Engineering & Technology (UET), Lahore
 📧 umershahid@uet.edu.pk

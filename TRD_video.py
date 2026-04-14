@@ -1,3 +1,28 @@
+"""
+Third Rail Defect Detection System  —  v4.0
+===========================================
+Detects sparking marks, corrosion, surface wear, and cracks on METRO Orange Line
+third-rail imagery.
+
+Fix history vs original script
+-------------------------------
+v1  LED threshold 400 → 210  (original > 255, never fired on uint8 images)
+v1  Wear threshold 10  → per-frame mean+2.8σ  (original flooded 82% of frame blue)
+v1  Crack minLineLength 1 → 30 + diagonal-angle filter  (original: every edge = crack)
+v2  Fixed ROI 40-80% → auto-detected rail band via column brightness profiling
+v2  Added column gate: exclude dim rail-edge fade zones from detection
+v2  Replaced adaptive threshold with Gaussian local-contrast detector
+v3  Added secondary absolute-dark detector for uniformly-corroded surfaces
+v3  Added row gate (exclude top/bottom 8%) to suppress tunnel ceiling/floor noise
+v3  Relaxed aspect ratio to 5.0 for secondary detector to catch narrow spark trails
+v3  Added very-dark-pixel fraction filter (≥3% of region pixels < 20) to reject
+    bright structural features that happen to have a dark minimum pixel
+v4  Reverted auto-ROI to fixed percentages (ROI_START_PCT / ROI_WIDTH_PCT).
+    In trolley deployment the rail always falls in the same band — no need
+    for dynamic detection. Eliminates false positives outside the rail.
+
+"""
+
 import cv2
 import numpy as np
 import os
@@ -7,598 +32,504 @@ from datetime import datetime
 import time
 
 # =============================================================================
-# CONFIGURABLE MACROS
+# CONFIGURABLE MACROS  — all tuning lives here, not inside functions
 # =============================================================================
 
-# ROI Configuration — horizontal strip of the image containing the rail contact surface
-ROI_START_PERCENT = 0.40          # Start of ROI as fraction of frame width
-ROI_WIDTH_PERCENT  = 0.40         # Width of ROI as fraction of frame width
+# ── Fixed ROI ─────────────────────────────────────────────────────────────────
+# Camera is mounted on a trolley at fixed distance → rail always in the same band.
+# Tune these two values once to match your mounting geometry.
+ROI_START_PCT       = 0.50   # left edge of ROI as fraction of frame width
+ROI_WIDTH_PCT       = 0.30   # width of ROI as fraction of frame width
 
-# LED / Glare Removal
-# FIX: original value was 400 which is larger than max uint8 (255), so it NEVER fired.
-# Correct range is 0-255. 210 targets only genuine LED-bright pixels.
-LED_BRIGHTNESS_THRESHOLD = 210    # Pixels brighter than this are treated as glare (uint8, 0-255)
-LED_KERNEL_SIZE           = 25    # Morphological dilation kernel for glare mask (px)
-LED_MIN_AREA              = 150   # Minimum glare blob area to trigger inpainting
-INPAINT_RADIUS            = 15    # Inpainting fill radius (px)
+# ── Glare removal ─────────────────────────────────────────────────────────────
+GLARE_THRESH        = 205    # pixels above this = LED glare  (uint8, 0-255)
+GLARE_DILATE_PX     = 31     # halo dilation — keep SMALL so adjacent defects survive
+GLARE_MIN_AREA      = 10
+INPAINT_RADIUS      = 12
 
-# Corrosion / Dark-Spot Detection
-# FIX: original combined simple-threshold (THRESH_BINARY_INV at 50) with adaptive,
-# then OR'd them — the adaptive alone already catches every dark region relative to
-# its local neighbourhood, so OR-ing with a global threshold just adds noise.
-# We now use adaptive-only with stricter block size and C constant.
-CORROSION_ADAPTIVE_BLOCK  = 51    # Adaptive threshold block size (must be odd)
-CORROSION_ADAPTIVE_C      = 18    # Constant subtracted from local mean
-CORROSION_MIN_AREA        = 80    # Minimum contour area to count as a defect (px²)
-CORROSION_MAX_AREA        = 8000  # Maximum — prevents giant background blobs
-CORROSION_MORPH_KERNEL    = (9, 9)# Morphological kernel — larger = fewer tiny blobs
-CORROSION_SEVERE_AREA     = 2000  # px² threshold for "High" severity
-CORROSION_MEDIUM_AREA     = 500   # px² threshold for "Medium" severity
+# ── Primary dark-spot detector  (local Gaussian contrast) ────────────────────
+LOCAL_BG_KERNEL     = (101, 101)  # large Gaussian for background estimate
+LOCAL_DARK_T        = 12          # pixel must be this much darker than neighbourhood
+SPOT_MIN_AREA       = 400         # px²  — filters isolated bolt holes / texture noise
+SPOT_MAX_AREA       = 80000
+SPOT_MAX_ASPECT     = 5.0         # h/w  — rejects vertical rail-joint lines
+SPOT_DARK_FRAC      = 0.45        # region min pixel < this × rail_mean
+SPOT_VD_FRAC        = 0.03        # ≥ this fraction of region pixels must be < 20
 
-# Surface Wear / Line Detection
-# FIX: original threshold was 10, causing 82%+ of the ROI to be flagged as wear
-# (producing the large blue flood). We now use a per-frame statistical threshold
-# (mean + N*std) so it adapts to each frame's actual lighting, not a hard value.
-WEAR_SIGMA_MULTIPLIER     = 2.8   # Threshold = mean + N*std of combined signal
-WEAR_MIN_AREA             = 300   # Minimum contour area (px²)
-WEAR_MORPH_KERNEL         = (5, 5)
-WEAR_SEVERE_AREA          = 1500  # px² threshold for "High" severity
+# ── Secondary dark-spot detector  (absolute darkness within lit zone) ─────────
+ABS_DARK_FRAC       = 0.30        # pixel < this × rail_mean = "absolutely dark"
+ABS_DARK_MIN_ABS    = 20          # absolute floor for the threshold
+ABS_SPOT_MAX_ASPECT = 5.0
 
-# Crack / Linear Defect Detection
-# FIX: original minLineLength=1 let HoughLinesP detect virtually every edge pixel
-# as a "crack". Raised to a meaningful minimum and tightened Hough parameters.
-CANNY_THRESHOLD1          = 40    # Lower Canny hysteresis threshold
-CANNY_THRESHOLD2          = 120   # Upper Canny hysteresis threshold
-HOUGH_VOTE_THRESHOLD      = 50    # Minimum Hough accumulator votes
-HOUGH_MIN_LINE_LENGTH     = 30    # Minimum line length in px — key false-positive filter
-HOUGH_MAX_LINE_GAP        = 8     # Max allowed gap within a line (px)
-CRACK_MIN_LENGTH          = 30    # Minimum crack length to report
-CRACK_SEVERE_LENGTH       = 80    # Length threshold for "High" severity
+# ── Severity thresholds for sparking / corrosion ──────────────────────────────
+SPOT_SEVERE_AREA    = 5000
+SPOT_MEDIUM_AREA    = 1500
 
-# Image Processing
-BILATERAL_D               = 9
-BILATERAL_SIGMA_COLOR     = 75
-BILATERAL_SIGMA_SPACE     = 75
-GAUSSIAN_KERNEL           = (3, 3)
-LINE_DETECTION_KERNEL_SZ  = 15    # Horizontal/vertical morphological kernel
+# ── Surface wear detection ────────────────────────────────────────────────────
+WEAR_SIGMA_MULT     = 2.8         # threshold = mean + N×std of texture signal
+WEAR_MIN_AREA       = 300
+WEAR_MORPH_K        = (5, 5)
+WEAR_SEVERE_AREA    = 1500
 
-# Visualization
-ROI_BOUNDARY_COLOR = (255, 200, 0)  # Cyan-yellow box around ROI
+# ── Crack / linear defect detection ──────────────────────────────────────────
+CANNY_T1            = 40
+CANNY_T2            = 120
+HOUGH_VOTES         = 50
+HOUGH_MIN_LEN       = 30
+HOUGH_MAX_GAP       = 8
+CRACK_MIN_LEN       = 30
+CRACK_SEVERE_LEN    = 80
+CRACK_ANGLE_MARGIN  = 15   # degrees — lines within this of H or V are rejected
+
+# ── Bilateral / Gaussian ──────────────────────────────────────────────────────
+BIL_D, BIL_SC, BIL_SS = 9, 75, 75
+GAUSS_K             = (3, 3)
+LINE_DETECT_K       = 15
+
+# ── Visualization ─────────────────────────────────────────────────────────────
+ROI_BOX_COLOR       = (0, 220, 255)
 DEFECT_COLORS = {
-    'Corrosion/Dark Spot':  {'bgr': (0, 60, 255),  'name': 'Red'},
-    'Surface Wear/Lines':   {'bgr': (255, 80, 0),  'name': 'Blue'},
-    'Crack/Linear Defect':  {'bgr': (0, 220, 50),  'name': 'Green'},
+    'Sparking/Corrosion':  {'bgr': (0,  50, 255), 'name': 'Red'},
+    'Surface Wear/Lines':  {'bgr': (255, 80,  0), 'name': 'Blue'},
+    'Crack/Linear Defect': {'bgr': (0, 220,  50), 'name': 'Green'},
 }
-DEFECT_LABEL_FONT       = cv2.FONT_HERSHEY_SIMPLEX
-DEFECT_LABEL_FONT_SCALE = 0.55
-DEFECT_LABEL_THICKNESS  = 2
-SUMMARY_FONT_SCALE      = 0.85
-SUMMARY_FONT_THICKNESS  = 2
-DEFECT_LABEL_MIN_AREA   = 300    # Only draw label text for defects above this area
+FONT            = cv2.FONT_HERSHEY_SIMPLEX
+LABEL_SCALE     = 0.55
+LABEL_THICK     = 2
+SUMMARY_SCALE   = 0.80
+LABEL_MIN_AREA  = 300
 
-# Live Video
-LIVE_FRAME_WIDTH    = 640
-LIVE_FRAME_HEIGHT   = 480
-LIVE_FPS            = 15
-RECORDING_DURATION  = 20         # seconds
-VIDEO_FPS           = 15
-OUTPUT_VIDEO_CODEC  = 'XVID'
-BUTTON_COLOR        = (0, 200, 0)
-BUTTON_INACTIVE_COLOR = (60, 60, 60)
+# ── Live video ────────────────────────────────────────────────────────────────
+LIVE_W, LIVE_H  = 640, 480
+LIVE_FPS        = 15
+REC_DURATION    = 20
+VIDEO_FPS       = 15
+VIDEO_CODEC     = 'XVID'
+BTN_ON          = (0, 200, 0)
+BTN_OFF         = (60, 60, 60)
 
 
 # =============================================================================
-# DETECTION ENGINE
+# HELPER
+# =============================================================================
+
+def _morph_open_close(mask, k):
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+    return mask
+
+def _glare_suppress(roi_gray):
+    """Return dilated glare mask for a grayscale ROI."""
+    _, gm = cv2.threshold(roi_gray, GLARE_THRESH, 255, cv2.THRESH_BINARY)
+    return cv2.dilate(gm, np.ones((GLARE_DILATE_PX, GLARE_DILATE_PX), np.uint8))
+
+
+# =============================================================================
+# DETECTOR
 # =============================================================================
 
 class ThirdRailDefectDetector:
+
     def __init__(self, input_folder="images", output_folder="output"):
         self.input_folder  = input_folder
         self.output_folder = output_folder
-        self.setup_output_folder()
-
-    def setup_output_folder(self):
-        for sub in ["processed", "comparisons", "live_captures", "live_recordings"]:
+        for sub in ["processed","comparisons","live_captures","live_recordings"]:
             Path(f"{self.output_folder}/{sub}").mkdir(parents=True, exist_ok=True)
 
-    # ── ROI ──────────────────────────────────────────────────────────────────
+    # ── 1. FIXED ROI ─────────────────────────────────────────────────────────
 
     def extract_rail_roi(self, image):
-        """Crop horizontally to the rail contact band."""
-        _, width = image.shape[:2]
-        x0 = int(width * ROI_START_PERCENT)
-        x1 = min(int(width * (ROI_START_PERCENT + ROI_WIDTH_PERCENT)), width)
+        """
+        Crop to a fixed horizontal band defined by ROI_START_PCT and ROI_WIDTH_PCT.
+        In trolley deployment the rail sits in the same position every frame, so
+        a fixed window is both simpler and more reliable than auto-detection.
+        Adjust ROI_START_PCT / ROI_WIDTH_PCT once to match your camera mounting.
+        """
+        w  = image.shape[1]
+        x0 = int(w * ROI_START_PCT)
+        x1 = min(int(w * (ROI_START_PCT + ROI_WIDTH_PCT)), w)
         return image[:, x0:x1], (x0, x1)
 
-    # ── LED / GLARE REMOVAL ──────────────────────────────────────────────────
+    def _col_gate(self, roi_gray):
+        """All columns within the fixed ROI are valid — return all-ones mask."""
+        return np.ones(roi_gray.shape, dtype=np.uint8)
 
-    def remove_led_glare(self, image):
-        """
-        Detect and inpaint LED glare.
+    def _row_gate(self, roi_gray):
+        """All rows within the fixed ROI are valid — return all-ones mask."""
+        return np.ones(roi_gray.shape, dtype=np.uint8)
 
-        FIX: The original LED_LIGHT_THRESHOLD was 400, which exceeds the maximum
-        uint8 pixel value of 255. The condition `gray > 400` is ALWAYS False, so
-        led_mask was always all-zeros and inpainting never ran.
-        Corrected threshold: 210 (targets genuine overexposed highlights only).
-        """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    # ── 2. GLARE REMOVAL ─────────────────────────────────────────────────────
 
-        # Binary mask of bright pixels
-        _, bright_mask = cv2.threshold(gray, LED_BRIGHTNESS_THRESHOLD, 255, cv2.THRESH_BINARY)
-
-        # Dilate to cover halo around glare spots
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (LED_KERNEL_SIZE, LED_KERNEL_SIZE))
-        bright_mask = cv2.dilate(bright_mask, kernel, iterations=1)
-
-        glare_area = np.count_nonzero(bright_mask)
-        if glare_area > LED_MIN_AREA:
-            result = cv2.inpaint(image, bright_mask, INPAINT_RADIUS, cv2.INPAINT_TELEA)
+    def remove_glare(self, image):
+        gray   = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape)==3 else image
+        mask_d = _glare_suppress(gray)
+        if int(mask_d.sum()//255) > GLARE_MIN_AREA:
+            result = cv2.inpaint(image, mask_d, INPAINT_RADIUS, cv2.INPAINT_TELEA)
         else:
             result = image.copy()
+        return result, mask_d
 
-        return result, bright_mask
+    # ── 3a. PRIMARY DARK-SPOT DETECTOR  (local Gaussian contrast) ────────────
 
-    # ── CORROSION DETECTION ──────────────────────────────────────────────────
-
-    def detect_corrosion_spots(self, image):
+    def detect_dark_spots_local(self, roi_gray, col_gate, row_gate, glare_mask, rail_mean):
         """
-        Detect dark oxidation / burn marks on the rail surface.
-
-        FIX: Original approach OR'd a global threshold (THRESH_BINARY_INV at 50)
-        with an adaptive threshold. The global threshold on its own flagged the
-        entire dark background of many images, producing dozens of spurious
-        contours even on a clean rail. We now use adaptive-only with a larger
-        block size and stricter C constant, paired with a bigger morphological
-        kernel to merge noise into ignorable blobs and raise the minimum area.
+        Flag pixels significantly darker than their 101px Gaussian neighbourhood.
+        Catches sparking clusters and corrosion against a lit background.
         """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        filtered  = cv2.bilateralFilter(roi_gray, BIL_D, BIL_SC, BIL_SS)
+        bg        = cv2.GaussianBlur(filtered.astype(np.float32), LOCAL_BG_KERNEL, 0)
+        ld        = np.clip(bg - filtered.astype(np.float32), 0, 255).astype(np.uint8)
 
-        # Edge-preserving smoothing
-        filtered = cv2.bilateralFilter(gray, BILATERAL_D,
-                                       BILATERAL_SIGMA_COLOR, BILATERAL_SIGMA_SPACE)
+        _, mask   = cv2.threshold(ld, LOCAL_DARK_T, 255, cv2.THRESH_BINARY)
+        mask      = mask & (col_gate * 255) & (row_gate * 255)
+        mask      = cv2.bitwise_and(mask, cv2.bitwise_not(glare_mask))
 
-        # Adaptive threshold only — responds to local illumination changes
-        dark_mask = cv2.adaptiveThreshold(
-            filtered, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            CORROSION_ADAPTIVE_BLOCK,
-            CORROSION_ADAPTIVE_C
-        )
+        k         = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        mask      = _morph_open_close(mask, k)
 
-        # Morphological cleanup with a larger kernel — removes salt-pepper noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, CORROSION_MORPH_KERNEL)
-        dark_mask = cv2.morphologyEx(dark_mask, cv2.MORPH_OPEN,  kernel)
-        dark_mask = cv2.morphologyEx(dark_mask, cv2.MORPH_CLOSE, kernel)
+        cntrs, _  = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return self._filter_spot_contours(cntrs, roi_gray, rail_mean, SPOT_MAX_ASPECT)
 
-        contours, _ = cv2.findContours(dark_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # ── 3b. SECONDARY DARK-SPOT DETECTOR  (absolute darkness) ────────────────
 
+    def detect_dark_spots_absolute(self, roi_gray, col_gate, row_gate, glare_mask, rail_mean):
+        """
+        Flag pixels below an absolute darkness level relative to the rail mean.
+        Catches uniformly-corroded rail surfaces where local contrast is weak
+        because the ENTIRE area is darkened by heavy oxidation or spark trails.
+        """
+        thresh = max(rail_mean * ABS_DARK_FRAC, ABS_DARK_MIN_ABS)
+        _, mask = cv2.threshold(roi_gray, int(thresh), 255, cv2.THRESH_BINARY_INV)
+        mask    = mask & (col_gate * 255) & (row_gate * 255)
+        mask    = cv2.bitwise_and(mask, cv2.bitwise_not(glare_mask))
+
+        k       = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        mask    = _morph_open_close(mask, k)
+
+        cntrs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return self._filter_spot_contours(cntrs, roi_gray, rail_mean, ABS_SPOT_MAX_ASPECT)
+
+    def _filter_spot_contours(self, cntrs, roi_gray, rail_mean, max_aspect):
+        """
+        Common filter applied to both detectors:
+          • area in [SPOT_MIN_AREA, SPOT_MAX_AREA]
+          • aspect ratio h/w ≤ max_aspect   (rejects vertical rail-joint lines)
+          • region minimum pixel < rail_mean × SPOT_DARK_FRAC  (genuinely dark)
+          • ≥ SPOT_VD_FRAC of region pixels < 20  (rejects bright structural features)
+        """
         valid = []
-        for c in contours:
+        for c in cntrs:
             area = cv2.contourArea(c)
-            if CORROSION_MIN_AREA < area < CORROSION_MAX_AREA:
-                x, y, w, h = cv2.boundingRect(c)
-                # Reject extremely elongated blobs (likely noise lines, not spots)
-                aspect = max(w, h) / (min(w, h) + 1e-6)
-                if aspect < 8:
-                    valid.append(c)
+            if not (SPOT_MIN_AREA < area < SPOT_MAX_AREA):
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            if h / (w + 1e-6) > max_aspect:
+                continue
+            reg = roi_gray[y:y+h, x:x+w]
+            if float(reg.min()) > rail_mean * SPOT_DARK_FRAC:
+                continue
+            if (reg < 20).mean() < SPOT_VD_FRAC:
+                continue
+            valid.append(c)
+        return valid
 
-        return valid, dark_mask
+    # ── 4. SURFACE WEAR ───────────────────────────────────────────────────────
 
-    # ── SURFACE WEAR DETECTION ────────────────────────────────────────────────
+    def detect_surface_wear(self, roi_gray, col_gate, glare_mask):
+        blurred = cv2.GaussianBlur(roi_gray, GAUSS_K, 0)
 
-    def detect_surface_wear_lines(self, image):
-        """
-        Detect worn / scratched surface texture.
+        hp_k    = np.array([[-1,-1,-1],[-1,8,-1],[-1,-1,-1]], dtype=np.float32)
+        hp      = np.clip(np.abs(cv2.filter2D(blurred.astype(np.float32), -1, hp_k)), 0, 255)
 
-        FIX: The original threshold was the constant 10, which is far below the
-        typical signal mean (~18-22). At threshold=10 the wear mask covered 82%+
-        of every frame, causing the massive blue flood on screen.
-
-        New approach: compute the mean and standard deviation of the combined
-        signal map for each frame and set threshold = mean + WEAR_SIGMA_MULTIPLIER*std.
-        This adapts to each frame's actual lighting and only flags pixels that are
-        statistically anomalous — preventing false positives on clean/new rail.
-        """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-
-        blurred = cv2.GaussianBlur(gray, GAUSSIAN_KERNEL, 0)
-
-        # High-frequency texture (Laplacian of Gaussian style)
-        lap_kernel = np.array([[-1,-1,-1],[-1,8,-1],[-1,-1,-1]])
-        high_pass  = np.clip(np.abs(cv2.filter2D(blurred.astype(np.float32), -1,
-                                                  lap_kernel.astype(np.float32))), 0, 255)
-
-        # Morphological line detection
-        hk = cv2.getStructuringElement(cv2.MORPH_RECT, (LINE_DETECTION_KERNEL_SZ, 1))
-        vk = cv2.getStructuringElement(cv2.MORPH_RECT, (1, LINE_DETECTION_KERNEL_SZ))
+        hk      = cv2.getStructuringElement(cv2.MORPH_RECT, (LINE_DETECT_K, 1))
+        vk      = cv2.getStructuringElement(cv2.MORPH_RECT, (1, LINE_DETECT_K))
         h_lines = cv2.morphologyEx(blurred, cv2.MORPH_OPEN, hk).astype(np.float32)
         v_lines = cv2.morphologyEx(blurred, cv2.MORPH_OPEN, vk).astype(np.float32)
         lines   = cv2.addWeighted(h_lines, 0.5, v_lines, 0.5, 0)
 
-        # Laplacian edge energy
-        laplacian = np.clip(np.abs(cv2.Laplacian(blurred, cv2.CV_64F, ksize=3)), 0, 255)
+        lap     = np.clip(np.abs(cv2.Laplacian(blurred, cv2.CV_64F, ksize=3)), 0, 255)
+        comb    = (0.4*hp + 0.3*lines + 0.3*lap).astype(np.uint8)
 
-        # Combine signals
-        combined = (0.4 * high_pass + 0.3 * lines + 0.3 * laplacian).astype(np.uint8)
+        m, s    = float(comb.mean()), float(comb.std())
+        t       = float(np.clip(m + WEAR_SIGMA_MULT * s, 30, 200))
 
-        # ── Per-frame adaptive threshold (the core fix) ─────────────────────
-        mean_val = float(combined.mean())
-        std_val  = float(combined.std())
-        adaptive_threshold = mean_val + WEAR_SIGMA_MULTIPLIER * std_val
-        adaptive_threshold = float(np.clip(adaptive_threshold, 30, 200))
+        _, mask = cv2.threshold(comb, t, 255, cv2.THRESH_BINARY)
+        mask    = mask & (col_gate * 255)
+        mask    = cv2.bitwise_and(mask, cv2.bitwise_not(glare_mask))
 
-        _, wear_mask = cv2.threshold(combined, adaptive_threshold, 255, cv2.THRESH_BINARY)
+        k       = cv2.getStructuringElement(cv2.MORPH_RECT, WEAR_MORPH_K)
+        mask    = _morph_open_close(mask, k)
 
-        # Morphological cleanup
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, WEAR_MORPH_KERNEL)
-        wear_mask = cv2.morphologyEx(wear_mask, cv2.MORPH_OPEN,  kernel)
-        wear_mask = cv2.morphologyEx(wear_mask, cv2.MORPH_CLOSE, kernel)
-
-        contours, _ = cv2.findContours(wear_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+        cntrs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         valid = []
-        for c in contours:
+        for c in cntrs:
             area = cv2.contourArea(c)
-            if area > WEAR_MIN_AREA:
-                rect = cv2.minAreaRect(c)
-                rw, rh = rect[1]
-                if rw > 0 and rh > 0:
-                    aspect = max(rw, rh) / (min(rw, rh) + 1e-6)
-                    # Wear marks are moderately elongated (scratches, grooves)
-                    if 1.2 < aspect < 10:
-                        valid.append(c)
+            if area < WEAR_MIN_AREA:
+                continue
+            rect = cv2.minAreaRect(c)
+            rw, rh = rect[1]
+            if rw > 0 and rh > 0 and 1.2 < max(rw,rh)/(min(rw,rh)+1e-6) < 10:
+                valid.append(c)
+        return valid
 
-        return valid, wear_mask
+    # ── 5. CRACKS ─────────────────────────────────────────────────────────────
 
-    # ── CRACK DETECTION ───────────────────────────────────────────────────────
+    def detect_cracks(self, roi_gray, col_gate):
+        filtered  = cv2.bilateralFilter(roi_gray, BIL_D, BIL_SC, BIL_SS)
+        edges     = cv2.Canny(filtered, CANNY_T1, CANNY_T2, apertureSize=3)
+        edges     = edges & (col_gate * 255)
 
-    def detect_cracks(self, image):
-        """
-        Detect cracks and linear structural defects.
-
-        FIX: Original minLineLength=1 let HoughLinesP return hundreds of
-        1-pixel edge fragments as "cracks". Raised to 30px minimum with a
-        tighter vote threshold. Also removed the secondary contour-from-edges
-        pass which duplicated and amplified the noise.
-        """
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-
-        filtered = cv2.bilateralFilter(gray, BILATERAL_D,
-                                       BILATERAL_SIGMA_COLOR, BILATERAL_SIGMA_SPACE)
-
-        edges = cv2.Canny(filtered, CANNY_THRESHOLD1, CANNY_THRESHOLD2, apertureSize=3)
-
-        lines = cv2.HoughLinesP(
-            edges, 1, np.pi / 180,
-            threshold=HOUGH_VOTE_THRESHOLD,
-            minLineLength=HOUGH_MIN_LINE_LENGTH,
-            maxLineGap=HOUGH_MAX_LINE_GAP
-        )
-
-        crack_contours = []
-        line_mask = np.zeros_like(gray)
-
+        lines     = cv2.HoughLinesP(edges, 1, np.pi/180,
+                                    threshold=HOUGH_VOTES,
+                                    minLineLength=HOUGH_MIN_LEN,
+                                    maxLineGap=HOUGH_MAX_GAP)
+        contours  = []
         if lines is not None:
             for ln in lines:
                 x1, y1, x2, y2 = ln[0]
-                length = float(np.hypot(x2 - x1, y2 - y1))
-                if length < CRACK_MIN_LENGTH:
+                if float(np.hypot(x2-x1, y2-y1)) < CRACK_MIN_LEN:
                     continue
-
-                # Angle filter — genuine cracks run diagonally.
-                # Near-horizontal (0-15°) and near-vertical (75-90°) lines are
-                # overwhelmingly the rail's own structural profile edges, not defects.
-                angle = abs(np.degrees(np.arctan2(y2 - y1, x2 - x1)))
-                is_horizontal = angle < 15 or angle > 165
-                is_vertical   = 75 < angle < 105
-                if is_horizontal or is_vertical:
+                ang = abs(np.degrees(np.arctan2(y2-y1, x2-x1)))
+                if (ang < CRACK_ANGLE_MARGIN or ang > 180-CRACK_ANGLE_MARGIN or
+                        90-CRACK_ANGLE_MARGIN < ang < 90+CRACK_ANGLE_MARGIN):
                     continue
+                contours.append(np.array([[[x1,y1]],[[x2,y2]]], dtype=np.int32))
+        return contours
 
-                cv2.line(line_mask, (x1, y1), (x2, y2), 255, 2)
-                crack_contours.append(
-                    np.array([[[x1, y1]], [[x2, y2]]], dtype=np.int32))
+    # ── 6. CLASSIFY ───────────────────────────────────────────────────────────
 
-        return crack_contours, line_mask
-
-    # ── CLASSIFICATION ────────────────────────────────────────────────────────
-
-    def classify_defects(self, corrosion_contours, wear_contours, crack_contours):
+    def classify(self, spot_c, wear_c, crack_c):
         defects = []
 
-        for c in corrosion_contours:
+        for c in spot_c:
             area = cv2.contourArea(c)
-            x, y, w, h = cv2.boundingRect(c)
-            severity = ("High"   if area > CORROSION_SEVERE_AREA else
-                        "Medium" if area > CORROSION_MEDIUM_AREA else "Low")
-            defects.append({'type': 'Corrosion/Dark Spot',
-                            'contour': c, 'area': area,
-                            'bbox': (x, y, w, h), 'severity': severity,
-                            'color': DEFECT_COLORS['Corrosion/Dark Spot']['bgr']})
+            x,y,w,h = cv2.boundingRect(c)
+            sev  = ("High"   if area > SPOT_SEVERE_AREA  else
+                    "Medium" if area > SPOT_MEDIUM_AREA  else "Low")
+            defects.append({'type':'Sparking/Corrosion','contour':c,'area':area,
+                            'bbox':(x,y,w,h),'severity':sev,
+                            'color':DEFECT_COLORS['Sparking/Corrosion']['bgr']})
 
-        for c in wear_contours:
+        for c in wear_c:
             area = cv2.contourArea(c)
-            x, y, w, h = cv2.boundingRect(c)
-            severity = "High" if area > WEAR_SEVERE_AREA else "Medium"
-            defects.append({'type': 'Surface Wear/Lines',
-                            'contour': c, 'area': area,
-                            'bbox': (x, y, w, h), 'severity': severity,
-                            'color': DEFECT_COLORS['Surface Wear/Lines']['bgr']})
+            x,y,w,h = cv2.boundingRect(c)
+            defects.append({'type':'Surface Wear/Lines','contour':c,'area':area,
+                            'bbox':(x,y,w,h),
+                            'severity':"High" if area > WEAR_SEVERE_AREA else "Medium",
+                            'color':DEFECT_COLORS['Surface Wear/Lines']['bgr']})
 
-        for c in crack_contours:
-            x, y, w, h = cv2.boundingRect(c)
-            length = max(w, h)
-            area   = cv2.contourArea(c)
-            severity = "High" if length > CRACK_SEVERE_LENGTH else "Medium"
-            defects.append({'type': 'Crack/Linear Defect',
-                            'contour': c, 'area': area,
-                            'bbox': (x, y, w, h), 'length': length,
-                            'severity': severity,
-                            'color': DEFECT_COLORS['Crack/Linear Defect']['bgr']})
+        for c in crack_c:
+            x,y,w,h = cv2.boundingRect(c)
+            length   = max(w,h)
+            defects.append({'type':'Crack/Linear Defect','contour':c,
+                            'area':cv2.contourArea(c),'bbox':(x,y,w,h),'length':length,
+                            'severity':"High" if length > CRACK_SEVERE_LEN else "Medium",
+                            'color':DEFECT_COLORS['Crack/Linear Defect']['bgr']})
 
         return defects
 
-    # ── VISUALISATION ─────────────────────────────────────────────────────────
+    # ── 7. VISUALIZE ──────────────────────────────────────────────────────────
 
-    def visualize_defects(self, original_image, defects, roi_bounds):
-        result = original_image.copy()
-        x0, x1 = roi_bounds
+    def visualize(self, original, defects, roi_bounds):
+        result      = original.copy()
+        x0, x1     = roi_bounds
+        cv2.rectangle(result,(x0,0),(x1,original.shape[0]),ROI_BOX_COLOR,2)
 
-        # Draw ROI boundary
-        cv2.rectangle(result, (x0, 0), (x1, original_image.shape[0]),
-                      ROI_BOUNDARY_COLOR, 2)
-
-        counts = {k: 0 for k in DEFECT_COLORS}
-
+        counts = {k:0 for k in DEFECT_COLORS}
         for d in defects:
             color   = d['color']
             contour = d['contour'].copy()
-            contour[:, :, 0] += x0          # shift contour into full-image coords
+            contour[:,:,0] += x0
             counts[d['type']] += 1
 
-            # Semi-transparent fill
             overlay = result.copy()
             cv2.fillPoly(overlay, [contour], color)
-            result = cv2.addWeighted(result, 0.82, overlay, 0.18, 0)
-            cv2.drawContours(result, [contour], -1, color, 2)
+            result  = cv2.addWeighted(result, 0.82, overlay, 0.18, 0)
+            cv2.drawContours(result,[contour],-1,color,2)
 
-            # Bounding box + label for significant defects only
-            if d['area'] > DEFECT_LABEL_MIN_AREA:
-                x, y, w, h = d['bbox']
+            if d['area'] > LABEL_MIN_AREA:
+                x,y,w,h = d['bbox']
                 x += x0
-                cv2.rectangle(result, (x, y), (x + w, y + h), color, 2)
-                label = f"{d['type'][:4]}-{d['severity'][0]}"
-                cv2.putText(result, label, (x, max(y - 6, 12)),
-                            DEFECT_LABEL_FONT, DEFECT_LABEL_FONT_SCALE,
-                            color, DEFECT_LABEL_THICKNESS)
+                cv2.rectangle(result,(x,y),(x+w,y+h),color,2)
+                cv2.putText(result,f"{d['type'][:5]}-{d['severity'][0]}",
+                            (x,max(y-6,12)),FONT,LABEL_SCALE,color,LABEL_THICK)
 
-        # Summary overlay (top-left)
         y_off = 28
-        cv2.putText(result, f"Defects: {len(defects)}", (10, y_off),
-                    DEFECT_LABEL_FONT, SUMMARY_FONT_SCALE,
-                    (255, 255, 255), SUMMARY_FONT_THICKNESS)
-        for dtype, cnt in counts.items():
-            if cnt > 0:
+        cv2.putText(result,f"Defects: {len(defects)}",(10,y_off),FONT,SUMMARY_SCALE,(255,255,255),2)
+        for dt,cnt in counts.items():
+            if cnt>0:
                 y_off += 22
-                cv2.putText(result, f"  {dtype}: {cnt}", (10, y_off),
-                            DEFECT_LABEL_FONT, 0.45, (220, 220, 220), 1)
-
+                cv2.putText(result,f"  {dt}: {cnt}",(10,y_off),FONT,0.45,(220,220,220),1)
         return result
 
-    # ── SIDE-BY-SIDE COMPARISON ───────────────────────────────────────────────
+    # ── 8. COMPARISON ─────────────────────────────────────────────────────────
 
     def create_comparison(self, original, processed, label=""):
-        oh, ow = original.shape[:2]
-        ph, pw = processed.shape[:2]
-        if oh != ph:
-            th = min(oh, ph)
-            original  = cv2.resize(original,  (int(ow * th / oh), th))
-            processed = cv2.resize(processed, (int(pw * th / ph), th))
-
-        gap  = np.full((original.shape[0], 10, 3), 100, dtype=np.uint8)
-        comp = np.hstack([original, gap, processed])
-
-        header = np.full((36, comp.shape[1], 3), 40, dtype=np.uint8)
-        ow2 = original.shape[1]
-        cv2.putText(header, "ORIGINAL",       (ow2 // 2 - 50, 24),
-                    DEFECT_LABEL_FONT, 0.7, (255, 255, 255), 2)
-        cv2.putText(header, "DEFECT ANALYSIS", (ow2 + 10 + 50, 24),
-                    DEFECT_LABEL_FONT, 0.7, (255, 255, 255), 2)
-
-        footer = np.full((28, comp.shape[1], 3), 40, dtype=np.uint8)
+        oh,ow = original.shape[:2]
+        ph,pw = processed.shape[:2]
+        if oh!=ph:
+            th = min(oh,ph)
+            original  = cv2.resize(original,  (int(ow*th/oh),th))
+            processed = cv2.resize(processed, (int(pw*th/ph),th))
+        gap  = np.full((original.shape[0],10,3),100,dtype=np.uint8)
+        comp = np.hstack([original,gap,processed])
+        hdr  = np.full((36,comp.shape[1],3),40,dtype=np.uint8)
+        cv2.putText(hdr,"ORIGINAL",        (original.shape[1]//2-50,24),FONT,0.7,(255,255,255),2)
+        cv2.putText(hdr,"DEFECT ANALYSIS", (original.shape[1]+60,24), FONT,0.7,(255,255,255),2)
+        ftr  = np.full((28,comp.shape[1],3),40,dtype=np.uint8)
         if label:
-            cv2.putText(footer, label, (10, 20),
-                        DEFECT_LABEL_FONT, 0.5, (180, 180, 180), 1)
+            cv2.putText(ftr,label,(10,20),FONT,0.5,(180,180,180),1)
+        return np.vstack([hdr,comp,ftr])
 
-        return np.vstack([header, comp, footer])
-
-    # ── FULL PIPELINE (single image) ──────────────────────────────────────────
+    # ── 9. FULL PIPELINE ──────────────────────────────────────────────────────
 
     def process_image(self, image):
-        """Run the full detection pipeline on a BGR image array."""
-        original = image.copy()
+        """Run complete detection pipeline. Returns (annotated_image, defects, roi_bounds)."""
+        original            = image.copy()
+        roi, roi_bounds     = self.extract_rail_roi(image)
 
-        roi, roi_bounds          = self.extract_rail_roi(image)
-        deglared, _              = self.remove_led_glare(roi)
-        corr_c, _                = self.detect_corrosion_spots(deglared)
-        wear_c, _                = self.detect_surface_wear_lines(deglared)
-        crack_c, _               = self.detect_cracks(deglared)
-        defects                  = self.classify_defects(corr_c, wear_c, crack_c)
-        result                   = self.visualize_defects(original, defects, roi_bounds)
+        roi_gray            = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        col_gate            = self._col_gate(roi_gray)
+        row_gate            = self._row_gate(roi_gray)
 
+        # Glare removal
+        deglared, _         = self.remove_glare(roi)
+        dg_gray             = cv2.cvtColor(deglared, cv2.COLOR_BGR2GRAY)
+        glare_mask          = _glare_suppress(dg_gray)
+
+        # Rail mean (used by both spot detectors)
+        lit_pixels          = dg_gray[col_gate.astype(bool)]
+        rail_mean           = float(lit_pixels.mean()) if lit_pixels.size > 0 else float(dg_gray.mean())
+
+        # Run all detectors
+        spot_local          = self.detect_dark_spots_local(dg_gray, col_gate, row_gate, glare_mask, rail_mean)
+        spot_abs            = self.detect_dark_spots_absolute(dg_gray, col_gate, row_gate, glare_mask, rail_mean)
+        wear_c              = self.detect_surface_wear(dg_gray, col_gate, glare_mask)
+        crack_c             = self.detect_cracks(dg_gray, col_gate)
+
+        # Merge spot detectors (simple concatenation — both pass same filters)
+        all_spots           = spot_local + spot_abs
+
+        defects             = self.classify(all_spots, wear_c, crack_c)
+        result              = self.visualize(original, defects, roi_bounds)
         return result, defects, roi_bounds
 
     def process_image_file(self, image_path):
         image = cv2.imread(image_path)
         if image is None:
-            print(f"Error loading: {image_path}")
-            return None
+            print(f"  Cannot load: {image_path}"); return None
         result, defects, _ = self.process_image(image)
-        print(f"{os.path.basename(image_path)}: {len(defects)} defects "
-              f"({sum(1 for d in defects if d['type']=='Corrosion/Dark Spot')} corrosion, "
-              f"{sum(1 for d in defects if d['type']=='Surface Wear/Lines')} wear, "
-              f"{sum(1 for d in defects if d['type']=='Crack/Linear Defect')} cracks)")
-        return {'original': image, 'processed': result, 'defects': defects}
+        sp = sum(1 for d in defects if d['type']=='Sparking/Corrosion')
+        wr = sum(1 for d in defects if d['type']=='Surface Wear/Lines')
+        cr = sum(1 for d in defects if d['type']=='Crack/Linear Defect')
+        print(f"  {os.path.basename(image_path)}: {len(defects)} defects  "
+              f"({sp} spark/corr, {wr} wear, {cr} crack)")
+        return {'original':image,'processed':result,'defects':defects}
 
     def process_all_images(self):
         paths = sorted(glob.glob(f"{self.input_folder}/*.jpg") +
                        glob.glob(f"{self.input_folder}/*.png"))
         if not paths:
-            print(f"No images found in {self.input_folder}/")
-            return
-
-        print(f"Processing {len(paths)} images …")
+            print(f"No images found in {self.input_folder}/"); return
+        print(f"Processing {len(paths)} images …\n")
         for p in paths:
             r = self.process_image_file(p)
-            if r is None:
-                continue
-            name = os.path.splitext(os.path.basename(p))[0]
-            cv2.imwrite(f"{self.output_folder}/processed/{name}_defects.jpg", r['processed'])
-            comp = self.create_comparison(r['original'], r['processed'], os.path.basename(p))
-            cv2.imwrite(f"{self.output_folder}/comparisons/{name}_comparison.jpg", comp)
-
-        print("Done.")
+            if r is None: continue
+            stem = os.path.splitext(os.path.basename(p))[0]
+            cv2.imwrite(f"{self.output_folder}/processed/{stem}_defects.jpg",    r['processed'])
+            comp = self.create_comparison(r['original'],r['processed'],os.path.basename(p))
+            cv2.imwrite(f"{self.output_folder}/comparisons/{stem}_comparison.jpg", comp)
+        print("\nDone.")
 
 
 # =============================================================================
-# LIVE VIDEO DETECTOR
+# LIVE DETECTOR
 # =============================================================================
 
 class LiveRailDefectDetector(ThirdRailDefectDetector):
 
     def __init__(self, camera_index=0, **kwargs):
         super().__init__(**kwargs)
-        self.camera_index        = camera_index
-        self.cap                 = None
-        self.recording           = False
-        self.video_writer        = None
-        self.recording_start     = 0
-        self.last_comparison     = None
+        self.camera_index = camera_index
+        self.cap = self.video_writer = None
+        self.recording = False
+        self.rec_start = 0
+        self.last_comp = None
 
-    # ── VIDEO WRITER ─────────────────────────────────────────────────────────
-
-    def _make_writer(self, filename, w, h):
-        fourcc = cv2.VideoWriter_fourcc(*OUTPUT_VIDEO_CODEC)
-        return cv2.VideoWriter(filename, fourcc, VIDEO_FPS, (w, h))
-
-    # ── CONTROL PANEL ────────────────────────────────────────────────────────
+    def _make_writer(self, path, w, h):
+        return cv2.VideoWriter(path,cv2.VideoWriter_fourcc(*VIDEO_CODEC),VIDEO_FPS,(w,h))
 
     def _draw_controls(self, frame):
-        rec_color = (0, 0, 220) if self.recording else BUTTON_INACTIVE_COLOR
-        cv2.rectangle(frame, (10, 10), (160, 58), rec_color, -1)
-        cv2.putText(frame, "RECORDING" if self.recording else "RECORD",
-                    (18, 40), DEFECT_LABEL_FONT, 0.58, (255, 255, 255), 2)
-
-        cv2.rectangle(frame, (175, 10), (315, 58), BUTTON_COLOR, -1)
-        cv2.putText(frame, "CAPTURE", (190, 40),
-                    DEFECT_LABEL_FONT, 0.58, (0, 0, 0), 2)
-
-        cv2.rectangle(frame, (330, 10), (450, 58), (0, 0, 200), -1)
-        cv2.putText(frame, "EXIT", (358, 40),
-                    DEFECT_LABEL_FONT, 0.58, (255, 255, 255), 2)
-
-        # Recording timer
+        rc = (0,0,200) if self.recording else BTN_OFF
+        cv2.rectangle(frame,(10,10),(165,56),rc,-1)
+        cv2.putText(frame,"RECORDING" if self.recording else "RECORD",(18,38),FONT,0.56,(255,255,255),2)
+        cv2.rectangle(frame,(178,10),(318,56),BTN_ON,-1)
+        cv2.putText(frame,"CAPTURE",(193,38),FONT,0.56,(0,0,0),2)
+        cv2.rectangle(frame,(330,10),(450,56),(0,0,180),-1)
+        cv2.putText(frame,"EXIT",(356,38),FONT,0.56,(255,255,255),2)
         if self.recording:
-            elapsed = int(time.time() - self.recording_start)
-            remaining = max(0, RECORDING_DURATION - elapsed)
-            cv2.putText(frame, f"{remaining}s", (465, 40),
-                        DEFECT_LABEL_FONT, 0.65, (0, 0, 220), 2)
+            cv2.putText(frame,f"{max(0,REC_DURATION-int(time.time()-self.rec_start))}s",
+                        (460,38),FONT,0.65,(0,0,220),2)
         return frame
 
     def _on_mouse(self, event, x, y, flags, param):
-        if event != cv2.EVENT_LBUTTONDOWN:
-            return
-        if 10 <= x <= 160 and 10 <= y <= 58:
-            self.stop_recording() if self.recording else self.start_recording()
-        elif 175 <= x <= 315 and 10 <= y <= 58:
-            self._capture()
-        elif 330 <= x <= 450 and 10 <= y <= 58:
-            self._quit()
-
-    # ── RECORDING / CAPTURE ──────────────────────────────────────────────────
+        if event!=cv2.EVENT_LBUTTONDOWN: return
+        if   10<=x<=165 and 10<=y<=56:  self.stop_recording() if self.recording else self.start_recording()
+        elif 178<=x<=318 and 10<=y<=56: self._capture()
+        elif 330<=x<=450 and 10<=y<=56: self._quit()
 
     def start_recording(self):
-        if self.last_comparison is None:
-            return
+        if self.last_comp is None: return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fn = f"{self.output_folder}/live_recordings/rec_{ts}.avi"
-        h, w = self.last_comparison.shape[:2]
-        self.video_writer    = self._make_writer(fn, w, h)
-        self.recording       = True
-        self.recording_start = time.time()
+        h,w = self.last_comp.shape[:2]
+        self.video_writer = self._make_writer(fn,w,h)
+        self.recording    = True
+        self.rec_start    = time.time()
         print(f"Recording → {fn}")
 
     def stop_recording(self):
-        if self.video_writer:
-            self.video_writer.release()
-            self.video_writer = None
-        self.recording = False
-        print("Recording saved.")
+        if self.video_writer: self.video_writer.release(); self.video_writer=None
+        self.recording = False; print("Recording saved.")
 
     def _capture(self):
-        if self.last_comparison is None:
-            return
+        if self.last_comp is None: return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         fn = f"{self.output_folder}/live_captures/capture_{ts}.jpg"
-        cv2.imwrite(fn, self.last_comparison)
-        print(f"Captured → {fn}")
+        cv2.imwrite(fn,self.last_comp); print(f"Captured → {fn}")
 
     def _quit(self):
-        self._cleanup()
-        cv2.destroyAllWindows()
-        raise SystemExit
-
-    # ── MAIN LOOP ─────────────────────────────────────────────────────────────
+        self._cleanup(); cv2.destroyAllWindows(); raise SystemExit
 
     def process_live_video(self):
         self.cap = cv2.VideoCapture(self.camera_index)
-        if not self.cap.isOpened():
-            print(f"Cannot open camera {self.camera_index}")
-            return
-
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  LIVE_FRAME_WIDTH)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, LIVE_FRAME_HEIGHT)
+        if not self.cap.isOpened(): print(f"Cannot open camera {self.camera_index}"); return
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  LIVE_W)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, LIVE_H)
         self.cap.set(cv2.CAP_PROP_FPS,          LIVE_FPS)
-
-        win = 'Third Rail Defect Detection'
+        win = "Third Rail Defect Detection v3"
         cv2.namedWindow(win)
-        cv2.setMouseCallback(win, self._on_mouse)
-
-        print("Live detection active.")
-        print("Controls: R = Record | C = Capture | Q = Quit")
-
+        cv2.setMouseCallback(win,self._on_mouse)
+        print("Live — R=Record  C=Capture  Q=Quit")
         while True:
-            ret, frame = self.cap.read()
-            if not ret:
-                print("Camera read error.")
-                break
-
-            processed, _, _ = self.process_image(frame)
-            comp             = self.create_comparison(frame, processed, "Live")
-            self.last_comparison = comp
-
-            display = self._draw_controls(comp.copy())
-            cv2.imshow(win, display)
-
+            ret,frame = self.cap.read()
+            if not ret: print("Camera read error."); break
+            processed,_,_ = self.process_image(frame)
+            comp           = self.create_comparison(frame,processed,"Live")
+            self.last_comp = comp
+            cv2.imshow(win,self._draw_controls(comp.copy()))
             if self.recording:
                 self.video_writer.write(comp)
-                if time.time() - self.recording_start >= RECORDING_DURATION:
-                    self.stop_recording()
-
-            key = cv2.waitKey(1) & 0xFF
-            if   key == ord('q'):  break
-            elif key == ord('r'):  self.stop_recording() if self.recording else self.start_recording()
-            elif key == ord('c'):  self._capture()
-
-        self._cleanup()
-        cv2.destroyAllWindows()
+                if time.time()-self.rec_start >= REC_DURATION: self.stop_recording()
+            key = cv2.waitKey(1)&0xFF
+            if   key==ord('q'): break
+            elif key==ord('r'): self.stop_recording() if self.recording else self.start_recording()
+            elif key==ord('c'): self._capture()
+        self._cleanup(); cv2.destroyAllWindows()
 
     def _cleanup(self):
-        if self.recording:
-            self.stop_recording()
-        if self.cap:
-            self.cap.release()
+        if self.recording: self.stop_recording()
+        if self.cap: self.cap.release()
 
 
 # =============================================================================
@@ -606,30 +537,20 @@ class LiveRailDefectDetector(ThirdRailDefectDetector):
 # =============================================================================
 
 def main():
-    print("=" * 52)
-    print("  Third Rail Defect Detection System  (v2.0)")
-    print("=" * 52)
+    print("="*56)
+    print("  Third Rail Defect Detection System  (v4.0)")
+    print("="*56)
     print("  1. Batch process image folder")
-    print("  2. Live webcam detection")
+    print("  2. Live webcam / camera detection")
     print("  3. Exit")
-    choice = input("Select mode (1-3): ").strip()
+    c = input("Select mode (1-3): ").strip()
+    if   c=='1': ThirdRailDefectDetector(input_folder="images",output_folder="output").process_all_images()
+    elif c=='2': LiveRailDefectDetector(camera_index=0,input_folder="images",output_folder="output").process_live_video()
+    elif c=='3': return
+    else: print("Invalid.")
 
-    if choice == '1':
-        ThirdRailDefectDetector(
-            input_folder="images", output_folder="output"
-        ).process_all_images()
-    elif choice == '2':
-        LiveRailDefectDetector(
-            camera_index=0, input_folder="images", output_folder="output"
-        ).process_live_video()
-    elif choice == '3':
-        return
-    else:
-        print("Invalid choice.")
-
-
-if __name__ == "__main__":
-    for d in ["images", "output/processed", "output/comparisons",
-              "output/live_captures", "output/live_recordings"]:
-        os.makedirs(d, exist_ok=True)
+if __name__=="__main__":
+    for d in ["images","output/processed","output/comparisons",
+              "output/live_captures","output/live_recordings"]:
+        os.makedirs(d,exist_ok=True)
     main()
