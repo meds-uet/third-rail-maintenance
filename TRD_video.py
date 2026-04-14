@@ -1,5 +1,5 @@
 """
-Third Rail Defect Detection System  —  v4.0
+Third Rail Defect Detection System  —  v4.1
 ===========================================
 Detects sparking marks, corrosion, surface wear, and cracks on METRO Orange Line
 third-rail imagery.
@@ -36,10 +36,12 @@ import time
 # =============================================================================
 
 # ── Fixed ROI ─────────────────────────────────────────────────────────────────
-# Camera is mounted on a trolley at fixed distance → rail always in the same band.
-# Tune these two values once to match your mounting geometry.
-ROI_START_PCT       = 0.50   # left edge of ROI as fraction of frame width
-ROI_WIDTH_PCT       = 0.30   # width of ROI as fraction of frame width
+# Camera is mounted on a trolley at fixed distance → rail always in the same window.
+# Tune all four values once to match your mounting geometry.
+ROI_START_PCT       = 0.55   # left edge of ROI as fraction of frame width
+ROI_WIDTH_PCT       = 0.40   # width of ROI as fraction of frame width
+ROI_TOP_PCT         = 0.20   # top edge of ROI as fraction of frame height
+ROI_HEIGHT_PCT      = 0.60   # height of ROI as fraction of frame height
 
 # ── Glare removal ─────────────────────────────────────────────────────────────
 GLARE_THRESH        = 205    # pixels above this = LED glare  (uint8, 0-255)
@@ -140,15 +142,18 @@ class ThirdRailDefectDetector:
 
     def extract_rail_roi(self, image):
         """
-        Crop to a fixed horizontal band defined by ROI_START_PCT and ROI_WIDTH_PCT.
-        In trolley deployment the rail sits in the same position every frame, so
-        a fixed window is both simpler and more reliable than auto-detection.
-        Adjust ROI_START_PCT / ROI_WIDTH_PCT once to match your camera mounting.
+        Crop to a fixed 2-D window: horizontal (ROI_START_PCT / ROI_WIDTH_PCT)
+        and vertical (ROI_TOP_PCT / ROI_HEIGHT_PCT).
+        Trimming both axes eliminates false positives on the top/bottom edges
+        of the frame where the rail is not present in trolley deployment.
+        Adjust all four macros once to match your camera mounting.
         """
-        w  = image.shape[1]
+        h, w = image.shape[:2]
         x0 = int(w * ROI_START_PCT)
         x1 = min(int(w * (ROI_START_PCT + ROI_WIDTH_PCT)), w)
-        return image[:, x0:x1], (x0, x1)
+        y0 = int(h * ROI_TOP_PCT)
+        y1 = min(int(h * (ROI_TOP_PCT + ROI_HEIGHT_PCT)), h)
+        return image[y0:y1, x0:x1], (x0, x1, y0, y1)
 
     def _col_gate(self, roi_gray):
         """All columns within the fixed ROI are valid — return all-ones mask."""
@@ -331,15 +336,16 @@ class ThirdRailDefectDetector:
     # ── 7. VISUALIZE ──────────────────────────────────────────────────────────
 
     def visualize(self, original, defects, roi_bounds):
-        result      = original.copy()
-        x0, x1     = roi_bounds
-        cv2.rectangle(result,(x0,0),(x1,original.shape[0]),ROI_BOX_COLOR,2)
+        result         = original.copy()
+        x0, x1, y0, y1 = roi_bounds
+        cv2.rectangle(result,(x0,y0),(x1,y1),ROI_BOX_COLOR,2)
 
         counts = {k:0 for k in DEFECT_COLORS}
         for d in defects:
             color   = d['color']
             contour = d['contour'].copy()
             contour[:,:,0] += x0
+            contour[:,:,1] += y0
             counts[d['type']] += 1
 
             overlay = result.copy()
@@ -350,9 +356,10 @@ class ThirdRailDefectDetector:
             if d['area'] > LABEL_MIN_AREA:
                 x,y,w,h = d['bbox']
                 x += x0
+                y += y0
                 cv2.rectangle(result,(x,y),(x+w,y+h),color,2)
                 cv2.putText(result,f"{d['type'][:5]}-{d['severity'][0]}",
-                            (x,max(y-6,12)),FONT,LABEL_SCALE,color,LABEL_THICK)
+                            (x,max(y-6,y0+12)),FONT,LABEL_SCALE,color,LABEL_THICK)
 
         # ── Legend panel ────────────────────────────────────────────────
         # Draw a semi-transparent dark background strip so text is readable
@@ -410,6 +417,7 @@ class ThirdRailDefectDetector:
         """Run complete detection pipeline. Returns (annotated_image, defects, roi_bounds)."""
         original            = image.copy()
         roi, roi_bounds     = self.extract_rail_roi(image)
+        x0, x1, y0, y1     = roi_bounds
 
         roi_gray            = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         col_gate            = self._col_gate(roi_gray)
@@ -561,7 +569,7 @@ class LiveRailDefectDetector(ThirdRailDefectDetector):
 
 def main():
     print("="*56)
-    print("  Third Rail Defect Detection System  (v1.0)")
+    print("  Third Rail Defect Detection System  (v4.1)")
     print("="*56)
     print("  1. Batch process image folder")
     print("  2. Live webcam / camera detection")
