@@ -44,7 +44,7 @@ ROI_WIDTH_PCT       = 0.30   # width of ROI as fraction of frame width
 # ── Glare removal ─────────────────────────────────────────────────────────────
 GLARE_THRESH        = 205    # pixels above this = LED glare  (uint8, 0-255)
 GLARE_DILATE_PX     = 31     # halo dilation — keep SMALL so adjacent defects survive
-GLARE_MIN_AREA      = 10
+GLARE_MIN_AREA      = 100
 INPAINT_RADIUS      = 12
 
 # ── Primary dark-spot detector  (local Gaussian contrast) ────────────────────
@@ -354,12 +354,35 @@ class ThirdRailDefectDetector:
                 cv2.putText(result,f"{d['type'][:5]}-{d['severity'][0]}",
                             (x,max(y-6,12)),FONT,LABEL_SCALE,color,LABEL_THICK)
 
-        y_off = 28
-        cv2.putText(result,f"Defects: {len(defects)}",(10,y_off),FONT,SUMMARY_SCALE,(255,255,255),2)
-        for dt,cnt in counts.items():
-            if cnt>0:
-                y_off += 22
-                cv2.putText(result,f"  {dt}: {cnt}",(10,y_off),FONT,0.45,(220,220,220),1)
+        # ── Legend panel ────────────────────────────────────────────────
+        # Draw a semi-transparent dark background strip so text is readable
+        # over any rail surface brightness.
+        legend_w   = 310
+        legend_h   = 28 + len(DEFECT_COLORS) * 28 + 10
+        overlay_lg = result.copy()
+        cv2.rectangle(overlay_lg, (4, 4), (4 + legend_w, 4 + legend_h), (20, 20, 20), -1)
+        result     = cv2.addWeighted(result, 0.35, overlay_lg, 0.65, 0)
+
+        y_off = 24
+        cv2.putText(result, f"Defects detected: {len(defects)}",
+                    (10, y_off), FONT, SUMMARY_SCALE, (255, 255, 255), 2)
+
+        for dt, info in DEFECT_COLORS.items():
+            y_off  += 28
+            bgr     = info['bgr']
+            cname   = info['name']          # human-readable colour name
+            cnt     = counts[dt]
+
+            # Filled colour swatch
+            sx = 10
+            cv2.rectangle(result, (sx, y_off - 13), (sx + 18, y_off + 5), bgr, -1)
+            cv2.rectangle(result, (sx, y_off - 13), (sx + 18, y_off + 5), (255,255,255), 1)
+
+            # Label: "Defect type (Colour): count"
+            label = f"{dt} ({cname}): {cnt}"
+            cv2.putText(result, label, (sx + 24, y_off),
+                        FONT, 0.46, (255, 255, 255), 1)
+
         return result
 
     # ── 8. COMPARISON ─────────────────────────────────────────────────────────
