@@ -1,190 +1,257 @@
 # 🚇 Third Rail Defect Detection System (TRDDS)
 
+Automated image-processing system for detecting surface defects on the **METRO Orange Line third rail**, developed by the [MEDS Lab](https://uet.edu.pk) at UET Lahore.
 
-A comprehensive system for detecting defects in metro third rails using both **image processing** and **real-time webcam analysis**. The system identifies:
-- Corrosion/Dark spots
-- Surface wear patterns
-- Cracks/Linear defects
-- LED glare interference
+The system identifies three categories of defects:
+
+| Defect | Colour | Description |
+|--------|--------|-------------|
+| **Sparking / Corrosion** | 🔴 Red | Dark oxidation patches and burn marks from electrical sparking |
+| **Surface Wear / Lines** | 🔵 Blue | Scratches, grooves, and mechanical wear patterns |
+| **Crack / Linear Defect** | 🟢 Green | Diagonal structural cracks in the rail surface |
+
+---
 
 ## 🌟 Key Features
 
-### 📷 Dual Operation Modes
-1. **Batch Image Processing** (`TRD_training.py`)
-   - Process folders of rail images
-   - Generate detailed defect reports
-   - Create before/after comparisons
+- **Dual operation modes** — batch processing of image folders and live camera feed
+- **Gaussian local-contrast detection** — adapts to each frame's actual brightness instead of fixed global thresholds
+- **Dual-pass dark-spot detection** — catches both locally-dark sparking clusters and uniformly-corroded surfaces
+- **LED glare removal** — inpaints bright reflections before detection runs
+- **Diagonal-only crack filter** — rejects rail-profile edges, only flags genuine structural cracks
+- **Colour-coded legend overlay** — on-screen panel shows swatch + colour name + count for each defect type
+- **Fixed ROI** — simple percentage crop designed for trolley-mounted camera deployment
+- **Optimised for Raspberry Pi 5** — live mode runs at 10–15 FPS at 640×480
 
-2. **Live Webcam Analysis** (`TRD_video.py`)
-   - Real-time defect detection
-   - Interactive controls:
-     - 📹 Record 20-second videos
-     - 📸 Capture still images
-     - ↔️ Side-by-side comparison view
-   - Optimized for Raspberry Pi 5
+---
 
-### 🔍 Advanced Detection Capabilities
-- **Multi-stage defect classification** by type and severity
-- **LED glare removal** for clearer analysis
-- **Adaptive thresholds** for varying lighting conditions
-- **Configurable sensitivity** through easy-to-edit macros
+## 🛠️ Installation
 
-## 🛠️ Installation & Setup
-
-### Prerequisites
+### Requirements
 - Python 3.8+
 - OpenCV 4.5+
-- Raspberry Pi 5 (for live mode) or any modern PC
+- NumPy
 
 ```bash
-# Clone repository
 git clone https://github.com/meds-uet/third-rail-maintenance.git
-cd third-rail-defect-detection
-
-# Install dependencies
+cd third-rail-maintenance
 pip3 install opencv-python numpy
 ```
 
+---
+
 ## 🚀 Usage
 
-### Batch Processing Mode
-1. Place your rail images in `/images` folder
-2. Run:
-   ```bash
-   python3 TRD_training.py
-   ```
-3. Results saved in:
-   - `/output/processed` - Annotated images
-   - `/output/comparisons` - Before/after comparisons
+### Mode 1 — Batch Image Processing (`TRD_training.py`)
 
-### Live Webcam Mode
-1. Connect your webcam
-2. Run:
-   ```bash
-   python3 TRD_video.py
-   ```
-3. Use the interactive controls:
-   - **RECORD** button: Capture 20-second video
-   - **CAPTURE** button: Save still image
-   - **EXIT** button: Quit application
-   - *Keyboard shortcuts*: R=Record, C=Capture, Q=Quit
+Processes every image in a folder and writes annotated outputs.
 
-4. Outputs saved in:
-   - `/output/live_captures` - Still images
-   - `/output/live_recordings` - Video clips
-
-## 📂 Folder Structure
+```bash
+# Place rail images in the images/ folder, then:
+python3 TRD_training.py
 ```
-project-root/
-├── images/                  # Input images for batch processing
+
+Outputs written to:
+
+```
+output/
+├── processed/      # Annotated images with defect overlays
+└── comparisons/    # Side-by-side original vs. detected
+```
+
+---
+
+### Mode 2 — Live Camera / Video (`TRD_video.py`)
+
+Real-time detection on a connected camera with an interactive GUI.
+
+```bash
+python3 TRD_video.py
+# Select option 2 at the menu
+```
+
+**On-screen controls:**
+
+| Button | Keyboard | Action |
+|--------|----------|--------|
+| RECORD | `R` | Start / stop a 20-second video clip |
+| CAPTURE | `C` | Save the current frame as a JPEG |
+| EXIT | `Q` | Quit the application |
+
+Live outputs saved to:
+
+```
+output/
+├── live_captures/    # Still images
+└── live_recordings/  # Video clips (.avi)
+```
+
+---
+
+## 📂 Repository Structure
+
+```
+third-rail-maintenance/
+├── TRD_training.py          # Batch image processing engine
+├── TRD_video.py             # Live camera detection + GUI
+walkthrough
+├── data/                    # 30+ real METRO Orange Line rail images
 ├── output/
-│   ├── processed/           # Processed images with defects marked
-│   ├── comparisons/         # Side-by-side before/after comparisons
-│   ├── live_captures/       # Webcam still images
+│   ├── processed/           # Annotated defect images
+│   ├── comparisons/         # Before/after side-by-side
+│   ├── live_captures/       # Webcam still captures
 │   └── live_recordings/     # Recorded video clips
-├── assets/                  # Documentation assets
-├── TRD_training.py          # Batch image processing
-└── TRD_video.py             # Live webcam processing script
 ```
 
-## ⚙️ Configuration Guide
-Key parameters in the code (all adjustable at top of files):
+---
+
+## ⚙️ Configuration
+
+All tuning parameters are grouped at the top of `TRD_video.py`. Edit them once — no changes needed inside functions.
+
+### ROI (Region of Interest)
+
+The camera is mounted on a trolley at a fixed distance, so the rail always falls in the same horizontal band. Set these two values to match your mounting geometry and leave them.
 
 ```python
-# === CONFIGURABLE MACROS ===
-# ROI Configuration
-ROI_START_PERCENT = 0.50          # % of image width to extract for rail ROI
-ROI_WIDTH_PERCENT = 0.30          # % of image width to extract for rail ROI
-
-# LED Light Removal Configuration
-LED_LIGHT_THRESHOLD = 400         # LED detection brightness threshold
-LED_KERNEL_SIZE = 80              # Size of morphological structuring element
-LED_MIN_AREA = 200                # Minimum area to trigger inpainting
-INPAINT_RADIUS = 20               # Radius for inpainting blur
-
-# Defect Detection Thresholds
-CORROSION_THRESHOLD = 50          # Dark spot threshold
-CRACK_THRESHOLD = 5               # Crack detection threshold
-MIN_DEFECT_AREA = 2               # Ignore small defects below this area
-MAX_DEFECT_AREA = 1000            # Ignore overly large blobs
-MIN_CRACK_LENGTH = 1              # Minimum length to be considered a crack
-ROUGHNESS_INTENSITY_THRESHOLD = 10 # For surface wear / rough track
-
-# Image Processing Parameters
-BILATERAL_FILTER_D = 9            # Diameter for bilateral filter
-BILATERAL_FILTER_SIGMA_COLOR = 80 # Sigma color for bilateral filter
-BILATERAL_FILTER_SIGMA_SPACE = 80 # Sigma space for bilateral filter
-GAUSSIAN_BLUR_KERNEL = (3, 3)     # Kernel size for Gaussian blur
-ADAPTIVE_THRESH_BLOCK_SIZE = 21   # Block size for adaptive threshold
-ADAPTIVE_THRESH_C = 10            # Constant for adaptive threshold
-MORPH_KERNEL_SIZE = (5, 5)        # Size for morphological operations
-LINE_DETECTION_KERNEL_SIZE = 15   # Size for line detection kernels
-CANNY_THRESHOLD1 = 30             # Canny edge detection threshold 1
-CANNY_THRESHOLD2 = 100            # Canny edge detection threshold 2
-CANNY_APERTURE_SIZE = 3           # Canny aperture size
-HOUGH_THRESHOLD = 30              # Threshold for Hough line detection
-HOUGH_MIN_LINE_LENGTH = 1         # Minimum line length for Hough
-HOUGH_MAX_LINE_GAP = 10           # Maximum line gap for Hough
-
-# Defect Classification Thresholds
-CORROSION_SEVERE_AREA = 2000      # Area threshold for severe corrosion
-CORROSION_MEDIUM_AREA = 800       # Area threshold for medium corrosion
-WEAR_SEVERE_AREA = 1500           # Area threshold for severe wear
-CRACK_SEVERE_LENGTH = 100         # Length threshold for severe cracks
-DEFECT_LABEL_AREA = 500           # Minimum area to show defect label
-
-# Visualization Parameters
-ROI_BOUNDARY_COLOR = (255, 255, 0) # Color for ROI boundary (BGR)
-DEFECT_COLORS = {
-    'Corrosion/Dark Spot': (0, 0, 255),    # Red
-    'Surface Wear/Lines': (255, 0, 0),     # Blue
-    'Crack/Linear Defect': (0, 255, 0)     # Green
-}
-DEFECT_LABEL_FONT = cv2.FONT_HERSHEY_SIMPLEX
-DEFECT_LABEL_FONT_SCALE = 0.6      # Increased font size
-DEFECT_LABEL_THICKNESS = 2         # Increased thickness
-SUMMARY_FONT_SCALE = 1.0           # Increased summary font size
-SUMMARY_FONT_THICKNESS = 2
-
-# Live Processing Parameters
-LIVE_FRAME_WIDTH = 640             # Reduced for RPi performance
-LIVE_FRAME_HEIGHT = 480
-LIVE_FPS = 15                      # Reduced FPS for RPi
-RECORDING_DURATION = 20            # seconds
-VIDEO_FPS = 15                     # frames per second for recording
-OUTPUT_VIDEO_CODEC = 'XVID'        # Codec for video recording
-BUTTON_COLOR = (0, 255, 0)         # Green color for active buttons
-BUTTON_INACTIVE_COLOR = (50, 50, 50) # Gray color for inactive buttons
+ROI_START_PCT  = 0.50   # Left edge of ROI as fraction of frame width
+ROI_WIDTH_PCT  = 0.30   # Width of ROI as fraction of frame width
 ```
 
+### Glare Removal
 
-## 🧩 Technical Approach
-1. **ROI Extraction**: Focuses analysis on the critical rail surface area
-2. **LED Glare Removal**: Uses adaptive thresholding and inpainting
-3. **Multi-Method Detection**:
-   - Corrosion: Adaptive thresholding + contour analysis
-   - Cracks: Canny edge detection + Hough line transform
-   - Wear: Morphological operations + texture analysis
-4. **Classification**: Defects categorized by type and severity
+```python
+GLARE_THRESH   = 205    # Pixels brighter than this are treated as LED glare (0-255)
+GLARE_DILATE_PX = 31   # Dilation radius around glare spots (px)
+INPAINT_RADIUS  = 12   # Inpainting fill radius (px)
+```
 
-## 📈 Performance Metrics
-| Mode          | Resolution | FPS (RPi 5) | FPS (PC) |
-|---------------|-----------|------------|----------|
-| Batch         | Original  | N/A        | ~3-5/img |
-| Live          | 640x480   | 10-15      | 25-30    |
+> **Note:** The original script used `LED_LIGHT_THRESHOLD = 400`, which is above the maximum uint8 value of 255 and therefore never fired. This has been corrected.
+
+### Sparking / Corrosion Detection (Primary — local contrast)
+
+Detects pixels significantly darker than their 101px Gaussian neighbourhood. Catches sparking clusters and corrosion against a brighter background.
+
+```python
+LOCAL_DARK_T    = 12    # How much darker than neighbourhood to flag (px intensity units)
+SPOT_MIN_AREA   = 400   # Minimum contour area in px² (filters bolt holes / texture)
+SPOT_MAX_AREA   = 80000
+SPOT_MAX_ASPECT = 5.0   # Max height/width ratio (rejects vertical rail-joint lines)
+SPOT_DARK_FRAC  = 0.45  # Region minimum pixel must be < this × rail mean
+SPOT_VD_FRAC    = 0.03  # ≥ this fraction of region pixels must be below intensity 20
+```
+
+### Sparking / Corrosion Detection (Secondary — absolute darkness)
+
+Catches uniformly-corroded surfaces where the whole rail is darkened so local contrast is weak.
+
+```python
+ABS_DARK_FRAC     = 0.30   # Pixel < this × rail mean = "absolutely dark"
+ABS_DARK_MIN_ABS  = 20     # Absolute floor for the threshold
+ABS_SPOT_MAX_ASPECT = 5.0
+```
+
+### Severity thresholds (Sparking / Corrosion)
+
+```python
+SPOT_SEVERE_AREA  = 5000   # px² → High severity
+SPOT_MEDIUM_AREA  = 1500   # px² → Medium severity (below = Low)
+```
+
+### Surface Wear Detection
+
+Uses a per-frame statistical threshold (`mean + N×std`) on a combined texture signal so it adapts to each image's lighting — prevents the wear detector flooding the frame on clean rail.
+
+```python
+WEAR_SIGMA_MULT  = 2.8    # Threshold = mean + N × std of texture signal
+WEAR_MIN_AREA    = 300    # Minimum contour area in px²
+WEAR_SEVERE_AREA = 1500   # px² → High severity
+```
+
+> **Note:** The original script used `ROUGHNESS_INTENSITY_THRESHOLD = 10`, which was below the signal mean and caused 82%+ of every frame to be classified as wear (the "blue flood"). Replaced with per-frame statistical thresholding.
+
+### Crack Detection
+
+```python
+CANNY_T1           = 40    # Lower Canny hysteresis threshold
+CANNY_T2           = 120   # Upper Canny hysteresis threshold
+HOUGH_VOTES        = 50    # Minimum Hough accumulator votes
+HOUGH_MIN_LEN      = 30    # Minimum line length in px
+HOUGH_MAX_GAP      = 8     # Maximum gap within a line (px)
+CRACK_MIN_LEN      = 30    # Minimum length to report as a crack
+CRACK_SEVERE_LEN   = 80    # px → High severity
+CRACK_ANGLE_MARGIN = 15    # Lines within this many degrees of horizontal or
+                           # vertical are rejected (rail profile edges, not cracks)
+```
+
+> **Note:** The original script used `HOUGH_MIN_LINE_LENGTH = 1`, which returned every single edge pixel as a "crack". Raised to 30 and added the diagonal-angle filter.
+
+### Bilateral / Gaussian Filter
+
+```python
+BIL_D, BIL_SC, BIL_SS = 9, 75, 75   # Bilateral filter: diameter, sigma colour, sigma space
+GAUSS_K                = (3, 3)       # Gaussian blur kernel
+LINE_DETECT_K          = 15           # Morphological line-detection kernel size
+```
+
+### Live Video
+
+```python
+LIVE_W, LIVE_H  = 640, 480   # Camera capture resolution
+LIVE_FPS        = 15          # Target FPS (reduced for Raspberry Pi 5)
+REC_DURATION    = 20          # Auto-stop recording after this many seconds
+VIDEO_CODEC     = 'XVID'      # Output video codec
+```
+
+---
+
+## 🧩 Detection Pipeline
+
+`TRD_video.py` runs the following stages on every frame:
+
+1. **Fixed ROI crop** — isolates the rail band using `ROI_START_PCT` / `ROI_WIDTH_PCT`
+2. **LED glare removal** — bright pixels inpainted before any detection
+3. **Primary dark-spot detection** — Gaussian local-contrast map, morphological cleanup, contour filter
+4. **Secondary dark-spot detection** — absolute brightness relative to rail mean, catches uniformly-dark surfaces
+5. **Surface wear detection** — high-pass texture + morphological line detection, per-frame statistical threshold
+6. **Crack detection** — Canny edges + probabilistic Hough, diagonal-angle filter
+7. **Classification** — each contour assigned type and Low / Medium / High severity
+8. **Visualisation** — colour-coded overlays + legend panel with colour swatches
+
+`TRD_demo.py` exposes all 32 intermediate steps of the pipeline on a single image for inspection and presentation.
+
+---
+
+
+## 📈 Performance
+
+| Mode | Resolution | FPS — Raspberry Pi 5 | FPS — PC |
+|------|------------|----------------------|----------|
+| Batch (`TRD_training.py`) | Original (1920×1080) | N/A | ~3–5 img/s |
+| Live (`TRD_video.py`) | 640×480 | 10–15 | 25–30 |
+
+---
+
 
 ## 🤝 Contributing
+
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/improvement`)
-3. Commit your changes (`git commit -m 'Add some feature'`)
-4. Push to the branch (`git push origin feature/improvement`)
+2. Create a feature branch: `git checkout -b feature/improvement`
+3. Commit: `git commit -m 'Add improvement'`
+4. Push: `git push origin feature/improvement`
 5. Open a Pull Request
 
+---
+
 ## 📜 License
-MIT License - See [LICENSE](LICENSE) for details
+
+MIT License — see [LICENSE](LICENSE) for details.
+
+---
 
 ## ✉️ Contact
+
 **Umer Shahid**
-Department of Electrical Engineering
+Lecturer, Department of Electrical Engineering
 University of Engineering & Technology (UET), Lahore
-📧 umershahid@uet.edu.pk
+📧 umer.shahid@uet.edu.pk

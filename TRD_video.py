@@ -561,7 +561,7 @@ class LiveRailDefectDetector(ThirdRailDefectDetector):
 
 def main():
     print("="*56)
-    print("  Third Rail Defect Detection System  (v4.0)")
+    print("  Third Rail Defect Detection System  (v1.0)")
     print("="*56)
     print("  1. Batch process image folder")
     print("  2. Live webcam / camera detection")
